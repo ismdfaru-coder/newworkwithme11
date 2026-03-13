@@ -151,6 +151,10 @@ export async function GET(req: Request) {
     return new Response(JSON.stringify({ error: "Missing query" }), { status: 400 });
   }
 
+  // Note: Keyplex API is called iteratively (up to MAX_STEPS times) 
+  // as the agent decides each browser command step by step.
+  // Each step consumes tokens - consider this for quota planning.
+
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream({
