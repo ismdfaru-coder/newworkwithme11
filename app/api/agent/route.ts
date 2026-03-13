@@ -48,56 +48,51 @@ async function deleteSession(sessionId: string, fcKey: string) {
   });
 }
 
-// Ask Keyplex what the NEXT single command should be, given the current snapshot
-async function getNextCommand(
+// Ask Keyplex ONCE to generate ALL the steps needed for the task
+async function getAllSteps(
   task: string,
-  history: { cmd: string; result: string }[],
   kpKey: string
-): Promise<{ cmd: string; done: boolean; reason: string }> {
+): Promise<{ steps: { cmd: string; reason: string }[]; summary: string }> {
   
-  // Build history, but only show LAST snapshot in full (most relevant)
-  const historyText = history
-    .map((h, i) => {
-      const isLast = i === history.length - 1;
-      const resultText = isLast ? h.result.slice(0, 4000) : h.result.slice(0, 500);
-      return `Step ${i + 1}:\nCommand: ${h.cmd}\nResult:\n${resultText}`;
-    })
-    .join("\n\n");
-
   const requestBody = {
     model: "openai/gpt-4o-mini",
-    max_tokens: 800,
+    max_tokens: 2000,
     messages: [
       {
         role: "system",
-        content: `You are a browser automation agent. You control a headless browser using agent-browser commands.
+        content: `You are a browser automation planner. Generate a COMPLETE sequence of commands to accomplish the given task.
 
 AVAILABLE COMMANDS:
 - agent-browser open <URL>           → Opens a webpage
-- agent-browser snapshot -i          → Returns list of page elements with [ref=eNN] identifiers
+- agent-browser snapshot -i          → Returns list of page elements with [ref=eNN] identifiers  
 - agent-browser click @eNN           → Clicks element with that ref (e.g., @e5, @e16)
 - agent-browser fill @eNN "text"     → Types text into input field with that ref
 
-CRITICAL RULES:
-1. After "open" or "click", ALWAYS run "snapshot -i" next to see updated page
-2. The refs like @e5, @e16 come from the LATEST snapshot output - use ONLY those exact refs
-3. Look at the snapshot result carefully - it shows elements like: button "Search" [ref=e21]
-4. To click that button, use: agent-browser click @e21
-5. NEVER use @REF literally - always use actual ref numbers from the snapshot
+PLANNING RULES:
+1. Start with "agent-browser open <URL>" for the relevant website
+2. After "open", include "agent-browser snapshot -i" to see the page
+3. Use placeholder refs like @e1, @e2, etc. - these will be matched to actual elements during execution
+4. For form filling, use descriptive placeholders that can be matched: @input_search, @input_from, @input_to, @button_submit
+5. Include snapshot commands after key actions to see results
+6. Plan for common UI patterns (search boxes, buttons, links)
 
 OUTPUT FORMAT (JSON only, no markdown):
-{ "cmd": "agent-browser ...", "done": false, "reason": "brief explanation" }
-
-When task is complete:
-{ "cmd": "", "done": true, "reason": "Here is the answer: ..." }`
+{
+  "steps": [
+    { "cmd": "agent-browser open https://example.com", "reason": "Navigate to the website" },
+    { "cmd": "agent-browser snapshot -i", "reason": "Get page elements" },
+    { "cmd": "agent-browser fill @input_search \\"search term\\"", "reason": "Enter search query" },
+    { "cmd": "agent-browser click @button_submit", "reason": "Submit the search" },
+    { "cmd": "agent-browser snapshot -i", "reason": "View search results" }
+  ],
+  "summary": "Brief description of what this plan accomplishes"
+}`
       },
       {
         role: "user",
         content: `TASK: ${task}
 
-Build a browsing sequence for this task so that a headless browser can complete it using agent-browser commands.
-
-${historyText ? `HISTORY:\n${historyText}\n\nBased on the LATEST snapshot result above, what is the NEXT command? Use the exact @eNN refs shown.` : "This is the first step. Start by opening the relevant URL."}`
+Generate a complete sequence of browser commands to accomplish this task. Include all necessary steps from start to finish.`
       }
     ],
   };
@@ -136,10 +131,54 @@ ${historyText ? `HISTORY:\n${historyText}\n\nBased on the LATEST snapshot result
   const text = (data.choices?.[0]?.message?.content ?? "{}").replace(/```json|```/g, "").trim();
   
   try {
-    return JSON.parse(text);
+    const parsed = JSON.parse(text);
+    return {
+      steps: parsed.steps || [],
+      summary: parsed.summary || "Task plan generated"
+    };
   } catch {
-    return { cmd: "", done: true, reason: "Failed to parse LLM response: " + text };
+    return { steps: [], summary: "Failed to parse LLM response: " + text };
   }
+}
+
+// Match placeholder refs to actual element refs from snapshot
+function resolveRef(cmd: string, snapshotOutput: string): string {
+  // If cmd has a placeholder like @input_search, @button_submit, find matching element in snapshot
+  const placeholderMatch = cmd.match(/@([a-z_]+)/i);
+  if (!placeholderMatch) return cmd;
+  
+  const placeholder = placeholderMatch[1].toLowerCase();
+  
+  // Common patterns to match
+  const patterns: Record<string, RegExp[]> = {
+    'input_search': [/input.*search.*\[ref=(e\d+)\]/i, /searchbox.*\[ref=(e\d+)\]/i, /search.*input.*\[ref=(e\d+)\]/i],
+    'input_from': [/from.*input.*\[ref=(e\d+)\]/i, /origin.*\[ref=(e\d+)\]/i, /departure.*\[ref=(e\d+)\]/i],
+    'input_to': [/to.*input.*\[ref=(e\d+)\]/i, /destination.*\[ref=(e\d+)\]/i, /arrival.*\[ref=(e\d+)\]/i],
+    'button_submit': [/button.*search.*\[ref=(e\d+)\]/i, /submit.*\[ref=(e\d+)\]/i, /button.*go.*\[ref=(e\d+)\]/i],
+    'button_search': [/button.*search.*\[ref=(e\d+)\]/i, /search.*button.*\[ref=(e\d+)\]/i],
+  };
+  
+  // Try to find matching element
+  const patternsToTry = patterns[placeholder] || [];
+  for (const pattern of patternsToTry) {
+    const match = snapshotOutput.match(pattern);
+    if (match && match[1]) {
+      return cmd.replace(/@[a-z_]+/i, `@${match[1]}`);
+    }
+  }
+  
+  // If no pattern matched, try to find any input/button with a ref
+  if (placeholder.includes('input')) {
+    const inputMatch = snapshotOutput.match(/input.*\[ref=(e\d+)\]/i);
+    if (inputMatch) return cmd.replace(/@[a-z_]+/i, `@${inputMatch[1]}`);
+  }
+  if (placeholder.includes('button')) {
+    const buttonMatch = snapshotOutput.match(/button.*\[ref=(e\d+)\]/i);
+    if (buttonMatch) return cmd.replace(/@[a-z_]+/i, `@${buttonMatch[1]}`);
+  }
+  
+  // Return original if no match found
+  return cmd;
 }
 
 export async function GET(req: Request) {
@@ -151,10 +190,7 @@ export async function GET(req: Request) {
     return new Response(JSON.stringify({ error: "Missing query" }), { status: 400 });
   }
 
-  // Note: Keyplex API is called iteratively (up to MAX_STEPS times) 
-  // as the agent decides each browser command step by step.
-  // Each step consumes tokens - consider this for quota planning.
-
+  // Keyplex API is called ONCE to get all steps, then executed locally
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream({
@@ -192,80 +228,83 @@ export async function GET(req: Request) {
 
         send("step", { type: "success", desc: `Session created. ID: ${session.id}` });
 
-        // ── 2. Iterative command loop ──────────────────────────────
-        // Each iteration: LLM decides next command -> execute -> feed result back
-        // This is exactly how the Firecrawl playground works
+        // ── 2. Get ALL steps from Keyplex in ONE API call ──────────────────
+        // Then execute them locally without repeated API calls
 
-        const history: { cmd: string; result: string }[] = [];
-        const MAX_STEPS = 20;
+        let lastSnapshotOutput = "";
 
         if (!kpKey) {
           // No LLM key — run a hardcoded demo for flight search
           send("step", { type: "info", desc: "No Keyplex key provided — running demo flight search commands" });
 
           const demoCmds = [
-            `agent-browser open https://www.google.com/travel/flights`,
-            `agent-browser snapshot -i`,
-            `agent-browser fill @e16 "Chennai"`,
-            `agent-browser snapshot -i`,
-            `agent-browser click @e5`,
-            `agent-browser fill @e18 "Manchester"`,
-            `agent-browser snapshot -i`,
-            `agent-browser click @e5`,
-            `agent-browser click @e19`,
-            `agent-browser snapshot -i`,
-            `agent-browser fill @e1 "05-20-2026"`,
-            `agent-browser fill @e2 "06-01-2026"`,
-            `agent-browser click @e336`,
-            `agent-browser snapshot -i`,
-            `agent-browser click @e21`,
-            `agent-browser snapshot -i`,
+            { cmd: `agent-browser open https://www.google.com/travel/flights`, reason: "Navigate to Google Flights" },
+            { cmd: `agent-browser snapshot -i`, reason: "Get page elements" },
+            { cmd: `agent-browser fill @e16 "Chennai"`, reason: "Enter departure city" },
+            { cmd: `agent-browser snapshot -i`, reason: "View updated page" },
+            { cmd: `agent-browser click @e5`, reason: "Select suggestion" },
+            { cmd: `agent-browser fill @e18 "Manchester"`, reason: "Enter destination" },
+            { cmd: `agent-browser snapshot -i`, reason: "View updated page" },
           ];
 
           for (let i = 0; i < demoCmds.length; i++) {
-            const cmd = demoCmds[i];
-            send("command", { index: i, total: demoCmds.length, cmd, reason: "demo step" });
+            const { cmd, reason } = demoCmds[i];
+            send("command", { index: i, total: demoCmds.length, cmd, reason });
 
             const result = await execCommand(sessionId, cmd, FIRECRAWL_API_KEY);
             const output = result.stdout || result.output || result.result || JSON.stringify(result);
             const hasError = result.stderr && result.stderr.includes("✗");
 
             send("result", { index: i, cmd, output: output.slice(0, 500), success: !hasError });
-            history.push({ cmd, result: output });
+
+            if (cmd.includes("snapshot")) {
+              lastSnapshotOutput = output;
+            }
 
             await new Promise(r => setTimeout(r, 800));
           }
 
         } else {
-          // LLM-driven loop — Keyplex decides each next command
-          send("step", { type: "info", desc: "Keyplex is driving the browser step by step..." });
+          // Call Keyplex API ONCE to get all steps
+          send("step", { type: "info", desc: "Requesting task plan from Keyplex (single API call)..." });
 
-          for (let step = 0; step < MAX_STEPS; step++) {
-            // Ask Keyplex what to do next
-            const { cmd, done, reason } = await getNextCommand(query, history, kpKey);
+          const { steps, summary } = await getAllSteps(query, kpKey);
 
-            if (done || !cmd) {
-              send("step", { type: "success", desc: `Completed: ${reason}` });
-              send("summary", { text: reason });
-              break;
+          if (steps.length === 0) {
+            send("step", { type: "error", desc: "Failed to generate steps: " + summary });
+            send("done", { message: summary });
+            return;
+          }
+
+          send("step", { type: "success", desc: `Plan received: ${steps.length} steps to execute` });
+
+          // Execute each step locally without calling API again
+          for (let i = 0; i < steps.length; i++) {
+            let { cmd, reason } = steps[i];
+
+            // Resolve placeholder refs using last snapshot output
+            if (lastSnapshotOutput && cmd.includes("@")) {
+              cmd = resolveRef(cmd, lastSnapshotOutput);
             }
 
-            send("command", { index: step, total: MAX_STEPS, cmd, reason });
+            send("command", { index: i, total: steps.length, cmd, reason });
 
             // Execute the command in the live browser
             const result = await execCommand(sessionId, cmd, FIRECRAWL_API_KEY);
-            // stdout contains the snapshot data with refs, result/output may be empty
             const output = result.stdout || result.output || result.result || JSON.stringify(result);
             const hasError = result.stderr && result.stderr.includes("✗");
 
-            send("result", { index: step, cmd, output: output.slice(0, 800), success: !hasError });
+            send("result", { index: i, cmd, output: output.slice(0, 800), success: !hasError });
 
-            // Feed result back into history for next decision - include stderr too for error context
-            const fullResult = hasError ? `ERROR: ${result.stderr}\n${output}` : output;
-            history.push({ cmd, result: fullResult });
+            // Store snapshot output for ref resolution in future steps
+            if (cmd.includes("snapshot")) {
+              lastSnapshotOutput = output;
+            }
 
             await new Promise(r => setTimeout(r, 600));
           }
+
+          send("summary", { text: summary });
         }
 
         send("done", { message: "Agent finished. See live browser panel above." });
