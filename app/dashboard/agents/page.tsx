@@ -371,13 +371,19 @@ export default function AgentsPage() {
       // Handle connection errors (network/server issues)
       eventSource.onerror = (err) => {
         console.log("[v0] SSE connection error:", err);
+        console.log("[v0] EventSource readyState:", eventSource.readyState);
         eventSource.close();
+        
+        // Provide helpful error message
+        const errorContent = eventSource.readyState === EventSource.CONNECTING
+          ? "Connection error: Unable to establish connection to agent API. Please check that the KEYPLEX_API_KEY is configured in your environment variables."
+          : "Connection error: Lost connection to agent API. The server may have encountered an error processing your request.";
         
         setMessages(prev => prev.map(m => 
           m.id === assistantMessageId 
             ? { 
                 ...m, 
-                content: "Connection error: Failed to connect to agent API. Check console for details.",
+                content: errorContent,
                 status: "error",
               }
             : m

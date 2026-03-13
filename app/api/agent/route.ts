@@ -102,6 +102,8 @@ ${historyText ? `HISTORY:\n${historyText}\n\nBased on the LATEST snapshot result
     ],
   };
 
+  console.log("[v0] Calling Keyplex API with key length:", kpKey.length);
+  
   const res = await fetch("https://keyplex.ai/api/v1/chat/completions", {
     method: "POST",
     headers: { 
@@ -111,8 +113,11 @@ ${historyText ? `HISTORY:\n${historyText}\n\nBased on the LATEST snapshot result
     body: JSON.stringify(requestBody),
   });
 
+  console.log("[v0] Keyplex API response status:", res.status);
+
   if (!res.ok) {
     const errText = await res.text();
+    console.error("[v0] Keyplex API error:", res.status, errText);
     throw new Error(`Keyplex API error: ${res.status} - ${errText}`);
   }
 
@@ -133,6 +138,13 @@ export async function GET(req: Request) {
 
   if (!query) {
     return new Response(JSON.stringify({ error: "Missing query" }), { status: 400 });
+  }
+
+  // Check if KEYPLEX_API_KEY is configured
+  if (!kpKey) {
+    console.log("[v0] KEYPLEX_API_KEY not configured - will run demo mode");
+  } else {
+    console.log("[v0] KEYPLEX_API_KEY found, length:", kpKey.length);
   }
 
   const encoder = new TextEncoder();
