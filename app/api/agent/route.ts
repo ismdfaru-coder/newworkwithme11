@@ -267,7 +267,7 @@ export async function GET(req: Request) {
         send("done", { message: "Agent finished. See live browser panel above." });
 
       } catch (err: unknown) {
-        send("error", { message: err instanceof Error ? err.message : String(err) });
+        send("agent_error", { message: err instanceof Error ? err.message : String(err) });
       } finally {
         controller.close();
         if (sessionId) {

@@ -338,29 +338,30 @@ export default function AgentsPage() {
         setIsLoading(false);
       });
 
-      eventSource.addEventListener("error", (e: Event) => {
+      // Track if we've received a proper error event to avoid overwriting with generic error
+      let receivedErrorEvent = false;
+
+      // Listen for agent_error events (renamed from "error" to avoid conflict with EventSource built-in)
+      eventSource.addEventListener("agent_error", (e: Event) => {
+        receivedErrorEvent = true;
         eventSource.close();
         // Try to parse error data from the event
-        let errorMsg = "Connection error";
-        let isQuotaError = false;
+        let errorMsg = "An error occurred";
         try {
           const msgEvent = e as MessageEvent;
           if (msgEvent.data) {
             const data = JSON.parse(msgEvent.data);
             errorMsg = data.message || data.error || errorMsg;
-            // Check for quota exceeded error
-            if (errorMsg.includes("QUOTA_EXCEEDED") || errorMsg.includes("quota exceeded")) {
-              isQuotaError = true;
-            }
           }
         } catch {
           // Ignore parse errors
         }
         
-        // Format user-friendly message
-        const displayMsg = isQuotaError 
-          ? "Your Keyplex API token quota has been exceeded. Please upgrade your plan at https://keyplex.ai/account#billing to continue using the AI-powered browser agent."
-          : `Error: ${errorMsg}`;
+        // Format user-friendly message for quota errors
+        let displayMsg = errorMsg;
+        if (errorMsg.includes("QUOTA_EXCEEDED") || errorMsg.toLowerCase().includes("quota exceeded") || errorMsg.toLowerCase().includes("token quota")) {
+          displayMsg = "Your Keyplex API token quota has been exceeded. Please upgrade your plan at https://keyplex.ai/account#billing to continue using the AI-powered browser agent.";
+        }
         
         setMessages(prev => prev.map(m => 
           m.id === assistantMessageId 
@@ -377,8 +378,12 @@ export default function AgentsPage() {
       });
 
       // Handle connection errors (network/server issues)
+      // Only show generic error if we haven't received a proper error event
       eventSource.onerror = () => {
         eventSource.close();
+        
+        // Don't override if we already got a proper error message
+        if (receivedErrorEvent) return;
         
         // Provide helpful error message
         const errorContent = eventSource.readyState === EventSource.CONNECTING
