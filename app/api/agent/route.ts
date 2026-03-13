@@ -102,8 +102,6 @@ ${historyText ? `HISTORY:\n${historyText}\n\nBased on the LATEST snapshot result
     ],
   };
 
-  console.log("[v0] Calling Keyplex API with key length:", kpKey.length);
-  
   const res = await fetch("https://keyplex.ai/api/v1/chat/completions", {
     method: "POST",
     headers: { 
@@ -113,11 +111,24 @@ ${historyText ? `HISTORY:\n${historyText}\n\nBased on the LATEST snapshot result
     body: JSON.stringify(requestBody),
   });
 
-  console.log("[v0] Keyplex API response status:", res.status);
-
   if (!res.ok) {
     const errText = await res.text();
-    console.error("[v0] Keyplex API error:", res.status, errText);
+    
+    // Parse and provide user-friendly error messages
+    try {
+      const errJson = JSON.parse(errText);
+      if (errJson.error?.code === "quota_exceeded") {
+        throw new Error(`QUOTA_EXCEEDED: Your Keyplex token quota has been exceeded. Please upgrade at https://keyplex.ai/account#billing`);
+      }
+      if (errJson.error?.message) {
+        throw new Error(`Keyplex API: ${errJson.error.message}`);
+      }
+    } catch (parseErr) {
+      if (parseErr instanceof Error && parseErr.message.startsWith("QUOTA_EXCEEDED")) {
+        throw parseErr;
+      }
+    }
+    
     throw new Error(`Keyplex API error: ${res.status} - ${errText}`);
   }
 
@@ -138,13 +149,6 @@ export async function GET(req: Request) {
 
   if (!query) {
     return new Response(JSON.stringify({ error: "Missing query" }), { status: 400 });
-  }
-
-  // Check if KEYPLEX_API_KEY is configured
-  if (!kpKey) {
-    console.log("[v0] KEYPLEX_API_KEY not configured - will run demo mode");
-  } else {
-    console.log("[v0] KEYPLEX_API_KEY found, length:", kpKey.length);
   }
 
   const encoder = new TextEncoder();

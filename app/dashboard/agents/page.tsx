@@ -342,23 +342,31 @@ export default function AgentsPage() {
         eventSource.close();
         // Try to parse error data from the event
         let errorMsg = "Connection error";
+        let isQuotaError = false;
         try {
           const msgEvent = e as MessageEvent;
           if (msgEvent.data) {
             const data = JSON.parse(msgEvent.data);
             errorMsg = data.message || data.error || errorMsg;
+            // Check for quota exceeded error
+            if (errorMsg.includes("QUOTA_EXCEEDED") || errorMsg.includes("quota exceeded")) {
+              isQuotaError = true;
+            }
           }
         } catch {
           // Ignore parse errors
         }
         
-        console.log("[v0] SSE error event:", errorMsg);
+        // Format user-friendly message
+        const displayMsg = isQuotaError 
+          ? "Your Keyplex API token quota has been exceeded. Please upgrade your plan at https://keyplex.ai/account#billing to continue using the AI-powered browser agent."
+          : `Error: ${errorMsg}`;
         
         setMessages(prev => prev.map(m => 
           m.id === assistantMessageId 
             ? { 
                 ...m, 
-                content: `Error: ${errorMsg}`,
+                content: displayMsg,
                 status: "error",
               }
             : m
@@ -369,9 +377,7 @@ export default function AgentsPage() {
       });
 
       // Handle connection errors (network/server issues)
-      eventSource.onerror = (err) => {
-        console.log("[v0] SSE connection error:", err);
-        console.log("[v0] EventSource readyState:", eventSource.readyState);
+      eventSource.onerror = () => {
         eventSource.close();
         
         // Provide helpful error message
