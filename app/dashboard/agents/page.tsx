@@ -276,8 +276,53 @@ export default function AgentsPage() {
                   ...(m.steps || []),
                   {
                     id: crypto.randomUUID(),
-                    type: data.type === "executing" ? "browsing" : "info",
+                    type: data.type === "executing" ? "browsing" : data.type === "success" ? "success" : "info",
                     description: data.desc,
+                    timestamp: new Date(),
+                  }
+                ]
+              }
+            : m
+        ));
+      });
+
+      // Show each command being executed
+      eventSource.addEventListener("command", (e) => {
+        const data = JSON.parse(e.data);
+        setMessages(prev => prev.map(m => 
+          m.id === assistantMessageId 
+            ? { 
+                ...m, 
+                content: `Step ${data.index + 1}/${data.total}: ${data.reason}`,
+                steps: [
+                  ...(m.steps || []),
+                  {
+                    id: crypto.randomUUID(),
+                    type: "browsing",
+                    description: `Executing: ${data.cmd}`,
+                    timestamp: new Date(),
+                  }
+                ]
+              }
+            : m
+        ));
+      });
+
+      // Show result of each command
+      eventSource.addEventListener("result", (e) => {
+        const data = JSON.parse(e.data);
+        const statusType = data.success ? "success" : "error";
+        const statusText = data.success ? "Completed" : "Failed";
+        setMessages(prev => prev.map(m => 
+          m.id === assistantMessageId 
+            ? { 
+                ...m, 
+                steps: [
+                  ...(m.steps || []),
+                  {
+                    id: crypto.randomUUID(),
+                    type: statusType,
+                    description: `${statusText}: ${data.cmd.split(" ").slice(0, 3).join(" ")}...`,
                     timestamp: new Date(),
                   }
                 ]
@@ -288,7 +333,6 @@ export default function AgentsPage() {
 
       eventSource.addEventListener("session", (e) => {
         const data = JSON.parse(e.data);
-        console.log("[v0] Session received:", data);
         // Set browser session with liveViewUrl from Firecrawl
         setBrowserSession({
           id: data.sessionId,
