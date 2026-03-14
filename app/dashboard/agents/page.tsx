@@ -42,23 +42,31 @@ interface Slide {
   textColor?: string
 }
 
+interface PlanStep {
+  index: number
+  cmd: string
+  reason: string
+}
+
 interface Message {
   id: string
   role: "user" | "assistant"
   content: string
   timestamp: Date
-  status?: "pending" | "browsing" | "processing" | "completed" | "error"
+  status?: "pending" | "browsing" | "processing" | "completed" | "error" | "complete"
   taskId?: string
   steps?: TaskStep[]
   artifacts?: Artifact[]
   slides?: Slide[]
+  plan?: PlanStep[]
 }
 
 interface TaskStep {
   id: string
-  type: "thinking" | "browsing" | "searching" | "analyzing" | "writing" | "complete"
+  type: "thinking" | "browsing" | "searching" | "analyzing" | "writing" | "complete" | "pending" | "success" | "error" | "info"
   description: string
   timestamp: Date
+  output?: string
 }
 
 interface Artifact {
@@ -286,6 +294,29 @@ export default function AgentsPage() {
         ));
       });
 
+      // Show the full plan upfront before execution
+      eventSource.addEventListener("plan", (e) => {
+        const data = JSON.parse(e.data);
+        // Create step entries for all planned steps (marked as pending)
+        const planSteps = data.steps.map((step: { index: number; cmd: string; reason: string }) => ({
+          id: crypto.randomUUID(),
+          type: "pending" as const,
+          description: `Step ${step.index + 1}: ${step.reason}\n${step.cmd}`,
+          timestamp: new Date(),
+        }));
+        
+        setMessages(prev => prev.map(m => 
+          m.id === assistantMessageId 
+            ? { 
+                ...m, 
+                content: `Plan received: ${data.total} steps to execute\n\n${data.summary}`,
+                plan: data.steps, // Store the plan for reference
+                steps: planSteps,
+              }
+            : m
+        ));
+      });
+
       // Show each command being executed
       eventSource.addEventListener("command", (e) => {
         const data = JSON.parse(e.data);
@@ -293,16 +324,12 @@ export default function AgentsPage() {
           m.id === assistantMessageId 
             ? { 
                 ...m, 
-                content: `Step ${data.index + 1}/${data.total}: ${data.reason}`,
-                steps: [
-                  ...(m.steps || []),
-                  {
-                    id: crypto.randomUUID(),
-                    type: "browsing",
-                    description: `Executing: ${data.cmd}`,
-                    timestamp: new Date(),
-                  }
-                ]
+                content: `Executing Step ${data.index + 1}/${data.total}: ${data.reason}`,
+                steps: (m.steps || []).map((step, idx) => 
+                  idx === data.index 
+                    ? { ...step, type: "browsing" as const, description: `Step ${data.index + 1}: ${data.reason}\nExecuting: ${data.cmd}` }
+                    : step
+                ),
               }
             : m
         ));
@@ -311,8 +338,29 @@ export default function AgentsPage() {
       // Show result of each command
       eventSource.addEventListener("result", (e) => {
         const data = JSON.parse(e.data);
-        const statusType = data.success ? "success" : "error";
-        const statusText = data.success ? "Completed" : "Failed";
+        // Update the specific step with result info
+        setMessages(prev => prev.map(m => 
+          m.id === assistantMessageId 
+            ? { 
+                ...m, 
+                steps: (m.steps || []).map((step, idx) => 
+                  idx === data.index 
+                    ? { 
+                        ...step, 
+                        type: data.success ? "success" as const : "error" as const,
+                        description: `Step ${data.index + 1}: ${data.success ? "Completed" : "Failed"}\n${data.cmd}`,
+                        output: data.output,
+                      }
+                    : step
+                ),
+              }
+            : m
+        ));
+      });
+
+      // Show snapshot verification
+      eventSource.addEventListener("snapshot", (e) => {
+        const data = JSON.parse(e.data);
         setMessages(prev => prev.map(m => 
           m.id === assistantMessageId 
             ? { 
@@ -321,11 +369,25 @@ export default function AgentsPage() {
                   ...(m.steps || []),
                   {
                     id: crypto.randomUUID(),
-                    type: statusType,
-                    description: `${statusText}: ${data.cmd.split(" ").slice(0, 3).join(" ")}...`,
+                    type: "info" as const,
+                    description: `Verification snapshot taken after step ${data.index + 1}`,
                     timestamp: new Date(),
+                    output: data.output,
                   }
                 ]
+              }
+            : m
+        ));
+      });
+
+      // Mark step as complete
+      eventSource.addEventListener("step_complete", (e) => {
+        const data = JSON.parse(e.data);
+        setMessages(prev => prev.map(m => 
+          m.id === assistantMessageId 
+            ? { 
+                ...m, 
+                content: `Completed Step ${data.index + 1}/${data.total}`,
               }
             : m
         ));
@@ -1179,21 +1241,28 @@ export default function AgentsPage() {
   }
 
   const getStepIcon = (type: TaskStep["type"], isLast: boolean) => {
-    if (!isLast || type === "complete") {
-      switch (type) {
-        case "thinking":
-          return <Sparkles className="h-3 w-3 text-blue-500" />
-        case "browsing":
-          return <Monitor className="h-3 w-3 text-cyan-500" />
-        case "searching":
-          return <Globe className="h-3 w-3 text-green-500" />
-        case "analyzing":
-          return <Code className="h-3 w-3 text-orange-500" />
-        case "writing":
-          return <FileText className="h-3 w-3 text-purple-500" />
-        case "complete":
-          return <Check className="h-3 w-3 text-green-500" />
-        default:
+  if (!isLast || type === "complete" || type === "success" || type === "error" || type === "pending" || type === "info") {
+  switch (type) {
+  case "thinking":
+  return <Sparkles className="h-3 w-3 text-blue-500" />
+  case "browsing":
+  return <Monitor className="h-3 w-3 text-cyan-500 animate-pulse" />
+  case "searching":
+  return <Globe className="h-3 w-3 text-green-500" />
+  case "analyzing":
+  return <Code className="h-3 w-3 text-orange-500" />
+  case "writing":
+  return <FileText className="h-3 w-3 text-purple-500" />
+  case "complete":
+  case "success":
+  return <Check className="h-3 w-3 text-green-500" />
+  case "error":
+  return <X className="h-3 w-3 text-red-500" />
+  case "pending":
+  return <Loader2 className="h-3 w-3 text-muted-foreground" />
+  case "info":
+  return <Eye className="h-3 w-3 text-blue-400" />
+  default:
           return <Sparkles className="h-3 w-3" />
       }
     }
@@ -1265,15 +1334,24 @@ export default function AgentsPage() {
                             </div>
                           </div>
                         )}
-                        {message.steps.filter(s => s.type !== "browsing").map((step, index) => (
-                          <div
-                            key={step.id}
-                            className="flex items-center gap-2 text-sm text-muted-foreground"
-                          >
-                            {getStepIcon(step.type, index === (message.steps?.filter(s => s.type !== "browsing").length || 0) - 1)}
-                            <span>{step.description}</span>
-                          </div>
-                        ))}
+  {message.steps.map((step, index) => (
+  <div
+  key={step.id}
+  className={cn(
+    "flex items-start gap-2 text-sm py-1",
+    step.type === "pending" && "text-muted-foreground opacity-60",
+    step.type === "browsing" && "text-cyan-600 dark:text-cyan-400",
+    step.type === "success" && "text-green-600 dark:text-green-400",
+    step.type === "error" && "text-red-600 dark:text-red-400",
+    step.type === "info" && "text-blue-600 dark:text-blue-400",
+  )}
+  >
+  <span className="mt-0.5 flex-shrink-0">
+    {getStepIcon(step.type, index === (message.steps?.length || 0) - 1)}
+  </span>
+  <span className="whitespace-pre-wrap">{step.description}</span>
+  </div>
+  ))}
                       </div>
                     )}
 

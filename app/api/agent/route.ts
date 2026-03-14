@@ -278,7 +278,19 @@ export async function GET(req: Request) {
 
           send("step", { type: "success", desc: `Plan received: ${steps.length} steps to execute` });
 
-          // Execute each step locally without calling API again
+          // ── PHASE 1: Show all planned steps upfront ──────────────────
+          send("plan", { 
+            steps: steps.map((s, i) => ({ index: i, cmd: s.cmd, reason: s.reason })),
+            total: steps.length,
+            summary 
+          });
+
+          // Give user time to see the plan
+          await new Promise(r => setTimeout(r, 1500));
+
+          // ── PHASE 2: Execute steps one by one with verification ──────
+          send("step", { type: "info", desc: "Starting execution..." });
+
           for (let i = 0; i < steps.length; i++) {
             let { cmd, reason } = steps[i];
 
@@ -287,21 +299,56 @@ export async function GET(req: Request) {
               cmd = resolveRef(cmd, lastSnapshotOutput);
             }
 
-            send("command", { index: i, total: steps.length, cmd, reason });
+            // Notify which step is starting
+            send("command", { index: i, total: steps.length, cmd, reason, status: "executing" });
+
+            // Give browser time to prepare (longer for open/navigate actions)
+            const isOpenCmd = cmd.includes("open ");
+            const isClickCmd = cmd.includes("click ");
+            const isFillCmd = cmd.includes("fill ");
+            
+            if (isOpenCmd) {
+              await new Promise(r => setTimeout(r, 500)); // Extra time before opening URL
+            }
 
             // Execute the command in the live browser
             const result = await execCommand(sessionId, cmd, FIRECRAWL_API_KEY);
             const output = result.stdout || result.output || result.result || JSON.stringify(result);
             const hasError = result.stderr && result.stderr.includes("✗");
 
-            send("result", { index: i, cmd, output: output.slice(0, 800), success: !hasError });
+            // Send result of this step
+            send("result", { index: i, cmd, output: output.slice(0, 1500), success: !hasError });
 
             // Store snapshot output for ref resolution in future steps
             if (cmd.includes("snapshot")) {
               lastSnapshotOutput = output;
             }
 
-            await new Promise(r => setTimeout(r, 600));
+            // Wait for browser to complete the action with appropriate delays
+            if (isOpenCmd) {
+              // Wait longer for page to fully load
+              send("step", { type: "info", desc: `Waiting for page to load...` });
+              await new Promise(r => setTimeout(r, 3000));
+            } else if (isClickCmd || isFillCmd) {
+              // Wait for click/fill action to complete
+              await new Promise(r => setTimeout(r, 1500));
+              
+              // Auto-snapshot after click/fill to verify and get updated refs
+              if (!steps[i + 1]?.cmd.includes("snapshot")) {
+                send("step", { type: "info", desc: `Taking verification snapshot...` });
+                const verifyResult = await execCommand(sessionId, "agent-browser snapshot -i", FIRECRAWL_API_KEY);
+                const verifyOutput = verifyResult.stdout || verifyResult.output || verifyResult.result || "";
+                lastSnapshotOutput = verifyOutput;
+                send("snapshot", { index: i, output: verifyOutput.slice(0, 1500) });
+                await new Promise(r => setTimeout(r, 500));
+              }
+            } else {
+              // Standard delay between steps
+              await new Promise(r => setTimeout(r, 1000));
+            }
+
+            // Mark step as complete
+            send("step_complete", { index: i, total: steps.length, success: !hasError });
           }
 
           send("summary", { text: summary });
