@@ -52,7 +52,7 @@ async function deleteSession(sessionId: string, fcKey: string) {
 async function getAllSteps(
   task: string,
   kpKey: string
-): Promise<{ steps: { cmd: string; reason: string }[]; summary: string }> {
+): Promise<{ steps: { cmd: string; reason: string }[]; summary: string; rawResponse: string }> {
   
   const requestBody = {
     model: "openai/gpt-4o-mini",
@@ -128,16 +128,18 @@ Generate a complete sequence of browser commands to accomplish this task. Includ
   }
 
   const data = await res.json();
-  const text = (data.choices?.[0]?.message?.content ?? "{}").replace(/```json|```/g, "").trim();
+  const rawContent = data.choices?.[0]?.message?.content ?? "{}";
+  const text = rawContent.replace(/```json|```/g, "").trim();
   
   try {
     const parsed = JSON.parse(text);
     return {
       steps: parsed.steps || [],
-      summary: parsed.summary || "Task plan generated"
+      summary: parsed.summary || "Task plan generated",
+      rawResponse: rawContent
     };
   } catch {
-    return { steps: [], summary: "Failed to parse LLM response: " + text };
+    return { steps: [], summary: "Failed to parse LLM response: " + text, rawResponse: rawContent };
   }
 }
 
@@ -268,7 +270,16 @@ export async function GET(req: Request) {
           // Call Keyplex API ONCE to get all steps
           send("step", { type: "info", desc: "Requesting task plan from Keyplex (single API call)..." });
 
-          const { steps, summary } = await getAllSteps(query, kpKey);
+          const { steps, summary, rawResponse } = await getAllSteps(query, kpKey);
+
+          // ── PHASE 0: Show raw Keyplex API response first ──────────────────
+          send("keyplex_response", { 
+            raw: rawResponse,
+            parsed: { steps, summary }
+          });
+
+          // Give user time to read the response
+          await new Promise(r => setTimeout(r, 2000));
 
           if (steps.length === 0) {
             send("step", { type: "error", desc: "Failed to generate steps: " + summary });
@@ -286,7 +297,7 @@ export async function GET(req: Request) {
           });
 
           // Give user time to see the plan
-          await new Promise(r => setTimeout(r, 1500));
+          await new Promise(r => setTimeout(r, 2000));
 
           // ── PHASE 2: Execute steps one by one with verification ──────
           send("step", { type: "info", desc: "Starting execution..." });

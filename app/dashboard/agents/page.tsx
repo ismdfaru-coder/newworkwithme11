@@ -59,6 +59,7 @@ interface Message {
   artifacts?: Artifact[]
   slides?: Slide[]
   plan?: PlanStep[]
+  keyplex_raw?: string
 }
 
 interface TaskStep {
@@ -294,6 +295,21 @@ export default function AgentsPage() {
         ));
       });
 
+      // Show raw Keyplex API response first
+      eventSource.addEventListener("keyplex_response", (e) => {
+        const data = JSON.parse(e.data);
+        setMessages(prev => prev.map(m => 
+          m.id === assistantMessageId 
+            ? { 
+                ...m, 
+                content: `Keyplex API Response:\n\n${data.raw}`,
+                keyplex_raw: data.raw,
+                status: "processing",
+              }
+            : m
+        ));
+      });
+
       // Show the full plan upfront before execution
       eventSource.addEventListener("plan", (e) => {
         const data = JSON.parse(e.data);
@@ -309,7 +325,7 @@ export default function AgentsPage() {
           m.id === assistantMessageId 
             ? { 
                 ...m, 
-                content: `Plan received: ${data.total} steps to execute\n\n${data.summary}`,
+                content: `Executing plan: ${data.total} steps\n\n${data.summary}`,
                 plan: data.steps, // Store the plan for reference
                 steps: planSteps,
               }
