@@ -310,7 +310,7 @@ export default function AgentsPage() {
         ));
       });
 
-      // Show the full plan upfront before execution
+      // Show the full plan upfront before execution (preserve keyplex_raw)
       eventSource.addEventListener("plan", (e) => {
         const data = JSON.parse(e.data);
         // Create step entries for all planned steps (marked as pending)
@@ -325,7 +325,10 @@ export default function AgentsPage() {
           m.id === assistantMessageId 
             ? { 
                 ...m, 
-                content: `Executing plan: ${data.total} steps\n\n${data.summary}`,
+                // Keep keyplex_raw in content, add execution status below
+                content: m.keyplex_raw 
+                  ? `Keyplex API Response:\n\n${m.keyplex_raw}\n\n---\n\nExecuting plan: ${data.total} steps\n${data.summary}`
+                  : `Executing plan: ${data.total} steps\n\n${data.summary}`,
                 plan: data.steps, // Store the plan for reference
                 steps: planSteps,
               }
@@ -333,14 +336,17 @@ export default function AgentsPage() {
         ));
       });
 
-      // Show each command being executed
+      // Show each command being executed (preserve keyplex_raw)
       eventSource.addEventListener("command", (e) => {
         const data = JSON.parse(e.data);
         setMessages(prev => prev.map(m => 
           m.id === assistantMessageId 
             ? { 
                 ...m, 
-                content: `Executing Step ${data.index + 1}/${data.total}: ${data.reason}`,
+                // Keep keyplex_raw visible, update execution status
+                content: m.keyplex_raw 
+                  ? `Keyplex API Response:\n\n${m.keyplex_raw}\n\n---\n\nExecuting Step ${data.index + 1}/${data.total}: ${data.reason}`
+                  : `Executing Step ${data.index + 1}/${data.total}: ${data.reason}`,
                 steps: (m.steps || []).map((step, idx) => 
                   idx === data.index 
                     ? { ...step, type: "browsing" as const, description: `Step ${data.index + 1}: ${data.reason}\nExecuting: ${data.cmd}` }
@@ -396,14 +402,16 @@ export default function AgentsPage() {
         ));
       });
 
-      // Mark step as complete
+      // Mark step as complete (preserve keyplex_raw)
       eventSource.addEventListener("step_complete", (e) => {
         const data = JSON.parse(e.data);
         setMessages(prev => prev.map(m => 
           m.id === assistantMessageId 
             ? { 
                 ...m, 
-                content: `Completed Step ${data.index + 1}/${data.total}`,
+                content: m.keyplex_raw 
+                  ? `Keyplex API Response:\n\n${m.keyplex_raw}\n\n---\n\nCompleted Step ${data.index + 1}/${data.total}`
+                  : `Completed Step ${data.index + 1}/${data.total}`,
               }
             : m
         ));
